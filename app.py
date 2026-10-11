@@ -11,7 +11,12 @@ from flask import (Flask, Response, abort, redirect, render_template_string,
 
 BASE_URL = os.environ.get("BASE_URL", "https://bobbie-ungalvanized-tatiana.ngrok-free.dev").rstrip("/")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "change-me")
-DB = os.environ.get("DB_PATH", "certs.db")
+# База лежит в ./data рядом с app.py. Если на Railway подключён том,
+# берём его путь (RAILWAY_VOLUME_MOUNT_PATH). DB_PATH переопределяет всё.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH") or os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+DB = os.environ.get("DB_PATH") or os.path.join(DATA_DIR, "certs.db")
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
@@ -33,6 +38,11 @@ def init():
             token_hash TEXT UNIQUE NOT NULL,
             created_at TEXT NOT NULL,
             used_at TEXT)""")
+        # Заранее выданные одноразовые QR: PRESET_TOKEN_HASHES=hash1,hash2
+        # (в окружении только хэши, сами токены есть только в QR)
+        for i, th in enumerate(filter(None, os.environ.get("PRESET_TOKEN_HASHES", "").split(","))):
+            c.execute("INSERT OR IGNORE INTO certs(name,token_hash,created_at) VALUES(?,?,?)",
+                      (f"Одноразовый сертификат #{i + 1}", th.strip().lower(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
 
 def h(token):
@@ -176,4 +186,9 @@ def api_check():
 
 init()
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    try:
+        from waitress import serve  # чистый Python WSGI-сервер, годится для продакшена
+        serve(app, host="0.0.0.0", port=port, threads=4)
+    except ImportError:
+        app.run(host="0.0.0.0", port=port)
